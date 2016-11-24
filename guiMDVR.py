@@ -207,7 +207,7 @@ class GuiMdvr(object):
         if oracle_exist:
             self.database_info = DatabaseInfo(right)
             self.database_info.pack(padx=10, pady=10)
-        Button(right, text='插入报警视频', command=self._insert_alarm_video_to_database).pack()
+            Button(right, text='插入报警视频', command=self._insert_alarm_video_to_database).pack()
         left.pack(side=LEFT, anchor=N)
         middle.pack(side=LEFT, anchor=N)
         right.pack(side=TOP, padx=10, pady=10, anchor=N)
