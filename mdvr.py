@@ -8,7 +8,7 @@ import re
 from uuid import uuid1
 import traceback
 from os import mkdir, path
-from datetime import datetime
+import datetime
 import logging
 import binascii
 import functools
@@ -18,6 +18,7 @@ import decimal
 import operator
 import json
 import itertools
+import collections
 
 MESSAGE_START = b'\x7e'
 MESSAGE_END = b'\x7e'
@@ -113,7 +114,7 @@ def bcd_to_time_str(value):
     assert isinstance(value, bytes)
     assert len(value) == 6
     time_with_out_line = printfuled(value)
-    return datetime.strptime(time_with_out_line, '%y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.datetime.strptime(time_with_out_line, '%y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
 
 
 def word_to_int(value):
@@ -817,40 +818,195 @@ class Message(object):
         return printfuled(self.message)
 
 
-class ChecksumError(Exception):
-    def __init__(self):
-        super(ChecksumError, self).__init__()
-        self.message = 'checksum is invalid!!!'
-
-    def __str__(self):
-        return self.message
+class MdvrBaseError(Exception):
+    """自定义异常的基类"""
+    pass
 
 
-class BYTE(object):
-    def __init__(self, value):
-        self.value = None
-        if value:
-            if isinstance(value, int) and value <= 255:
-                self.value = bytes((value,))
-            elif isinstance(value, str) and len(value) <= 1:
-                self.value = bytes(value, 'utf-8')
-            elif isinstance(value, bytes) and len(value) <= 1:
-                self.value = value
+class ChecksumError(MdvrBaseError):
+    pass
+
+
+class DataBytesError(MdvrBaseError):
+    """有关DataBytes的异常"""
+    pass
+
+
+class DataBytesTypeError(MdvrBaseError):
+    """传入参数类型有误"""
+    pass
+
+
+class DataBytes(object):
+    """用于数据类型转换"""
+    def __init__(self, value=None):
+        if isinstance(value, bytes):
+            self.value = value
+        elif isinstance(value, DataBytes):
+            self.value = value.value
+        elif isinstance(value, str):
+            self.value = binascii.a2b_hex(value)
         else:
-            self.value = b'\x00'
+            raise DataBytesTypeError()
 
-    def __str__(self):
-        return str(self.value)
+    def to_string(self):
+        return printfuled(self.value)
+
+    def to_bytes(self):
+        return self.value
+
+    def to_int(self):
+        result = 0
+        for i, value in enumerate(reversed(self.value)):
+            result += value << (i * 8)
+        return result
+
+    def __add__(self, other):
+        assert isinstance(other, DataBytes)
+        return DataBytes(self.value + other.value)
+
+    __str__ = to_string
+    __bytes__ = to_bytes
+    __int__ = to_int
+    to_printful_string = to_string
 
 
-class WORD(object):
+class Byte(DataBytes):
     def __init__(self, value):
-        self.value = None
-        if isinstance(value, int) and value <= 65535:
-            self.value = BYTE(value // 255).value + BYTE(value % 255).value
-        elif isinstance(value, str) and len(value) <= 2:
-            if len(value) == 1:
-                pass
+        super().__init__()
+        if isinstance(value, int):
+            assert 0 <= value <= 255
+            self.value = bytes((value,))
+        elif isinstance(value, str):
+            assert len(value) == 1
+            self.value = value.encode('utf-8')
+        elif isinstance(value, bytes):
+            assert len(value) == 1
+            self.value = value
+        else:
+            raise DataBytesTypeError()
+
+    def to_string(self):
+        return self.value.decode('utf-8')
+
+    __str__ = to_string
+
+
+class ByteN(DataBytes):
+    def __init__(self, value, n):
+        super().__init__()
+        if isinstance(value, str):
+            assert len(value) <= n * 2
+            self.value = value.encode('utf-8').ljust(n, b'\x00\x00')
+        elif isinstance(value, list) or isinstance(value, tuple):
+            assert len(value) == n
+            self.value = b''.join([bytes(Byte(i)) for i in value])
+        else:
+            raise DataBytesTypeError()
+
+    def to_string(self):
+        return self.value.decode('utf-8')
+
+    __str__ = to_string
+
+
+
+class Word(DataBytes):
+    def __init__(self, value):
+        super().__init__()
+        if isinstance(value, int):
+            assert 0 <= value <= 65535
+            self.value = bytes((value >> 8, value & 255))
+        elif isinstance(value, str):
+            assert len(value) == 2
+            self.value = value.encode('utf-8')
+        elif isinstance(value, bytes):
+            assert len(value) == 2
+            self.value = value
+        else:
+            raise DataBytesTypeError()
+
+    def to_string(self):
+        return self.value.decode('utf-8')
+
+    __str__ = to_string
+
+
+class Dword(DataBytes):
+    def __init__(self, value):
+        super().__init__()
+        if isinstance(value, int):
+            assert 0 <= value <= 4294967295
+            self.value = bytes((value >> 24, value >> 16 & 255, value >> 8 & 255, value & 255))
+        elif isinstance(value, str):
+            assert len(value) == 4
+            self.value = value.encode('utf-8')
+        elif isinstance(value, bytes):
+            assert len(value) == 4
+            self.value = value
+        else:
+            raise DataBytesTypeError()
+
+    def to_string(self):
+        return self.value.decode('utf-8')
+
+    __str__ = to_string
+
+
+class String(DataBytes):
+    def __init__(self, value):
+        super().__init__()
+        if isinstance(value, str):
+            self.value = value.encode('gbk')
+        elif isinstance(value, bytes):
+            self.value = value
+        else:
+            raise DataBytesTypeError()
+
+    def to_string(self):
+        return self.value.decode('gbk')
+
+    __str__ = to_string
+
+
+class Bcd(DataBytes):
+    def __init__(self, value, n):
+        assert isinstance(n, int)
+        super().__init__()
+        if isinstance(value, int):
+            assert 0 <= value < 10 ** n
+            self.value = binascii.a2b_hex(str(value).rjust(2 * n, '0'))
+        elif isinstance(value, str):
+            assert len(value) % 2 == 0
+            self.value = binascii.a2b_hex(value)
+        elif isinstance(value, bytes):
+            self.value = value
+        else:
+            raise DataBytesTypeError()
+
+    def to_int(self):
+        return int(self.to_printful_string())
+
+    __int__ = to_int
+
+
+class BcdTime(Bcd):
+    time_format = '%y%m%d%H%M%S'
+
+    def __init__(self, value):
+        if isinstance(value, datetime.datetime):
+            super().__init__(value.strftime(self.time_format), 6)
+        elif isinstance(value, str):
+            assert len(value) == 12
+            super().__init__(value, 6)
+        elif isinstance(value, bytes):
+            assert len(value) == 6
+            self.value = value
+        else:
+            raise DataBytesTypeError()
+
+    def to_datetime(self):
+        return datetime.datetime.strptime(self.to_printful_string(), self.time_format)
 
 
 def multiMDVR(total, thread_per_process=100, ip='127.0.0.1'):
@@ -873,102 +1029,3 @@ def multi_thread(start_num, total, ip='127.0.0.1'):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s: %(message)s ' + ' ' * 10 + ' %(pathname)s: %(lineno)s')
-    # gps = GPS(136.1234, 66.6543, 321, 123, 300)
-    # a = MDVR(13488834791, ip='127.0.0.1', gps=gps)
-    # print(BYTE('o').value)
-    # print(BYTE(b'0').value)
-    # print(BYTE(55).value)
-    # a.connect()
-    # print('au', a.authentication_code)
-    # a.send_register()
-    # print('wr', a.waiting_response)
-    # # a.receive()
-    # print('au', repr(a.authentication_code))
-    # sleep(1)
-    # a.send_location_information()
-    # # a.send_heart_beat()
-    # # a.send_logout()
-    # a.close()
-    # print(a.waiting_response)
-    # for i in range(10):
-    #     mdvr = []
-    #     for i in range(100):
-    #         mdvr.append(MDVR(100000+i, ip='127.0.0.1', gps=gps, authentication_code='1000%04d' % i))
-    #     thread = []
-    #     for i in range(100):
-    #         thread.append(multiprocessing.Process(target=mdvr[i].test))
-    #     for i in range(100):
-    #         thread[i].start()
-    #     for i in range(100):
-    #         thread[i].join()
-    # import time
-    # a = time.time()
-    # b = multiMDVR(1)
-    # for i in b:
-    #     i.join()
-    # print(time.time()-a)
-    gps = GPS(116.1299, 39.7599, 321, 123, 300)
-    # a = MDVR(18812345678, authentication_code='99999BC00002', ip='172.16.50.98', manufacturer_id="99999",
-    #          terminal_id='BC00002', plate='TS-TS0002', gps=gps)
-
-    # a = MDVR(1234567890, authentication_code='99999act0001', ip='172.16.50.98')
-    # a.connect()
-    # # a.send_register()
-    # a.send_terminal_authentication()
-    # a.receive()
-    # # for i in range(10):
-    # #     # a.alarm_flag[0] = 1
-    # #     a.send_location_information()
-    # #     a.receive()
-    # #     sleep(60)
-    # a.receive()
-    # while True:
-    #     a.receive(60)
-    #     a.send_heart_beat()
-    #     a.receive()
-
-
-    # a.send_register()
-    # a.receive()
-    # a.send_register()
-    # a.receive()
-    #
-    # a.send_terminal_authentication()
-    # a.receive()
-    # sleep(10)
-    # for i in range(10000):
-    #     t = time()
-    #     # a.send_location_information()
-    #     a.send_heart_beat()
-    #     if not a.receive_message(4):
-    #         logging.error(time() - t)
-    # a.status = [1 for i in a.status]
-    # a.send_location_information()
-    # for i in range(1000):
-    #     a.alarm_flag = [1 for i in a.alarm_flag]
-    #     a.send_location_information()
-    #     a.receive()
-    #     sleep(1)
-    # a.alarm_flag[0] = 1
-    # for i in range(10):
-    #     sleep(1)
-    #     a.send_heart_beat()
-    #     sleep(1)
-    #     a.send_location_information()
-    # sleep(5)
-    # a.send_heart_beat()
-    # a.receive()
-    # a.sock.send(b'7e00020000018812345678000d8e7e')
-    # for i in range(100):
-    #     a.send_location_information()
-    #     a.receive()
-    #     sleep(1)
-    # sleep(5)
-    # a.sock.send(binascii.a2b_hex('7e000200000188123456780001827e7e0200001c0188123456780002000000000000000e0254f9c8082a43d000c8001e012c160629155636f27e7e000200000188123456780003807e7e0200001c0188123456780002000000000000000e0254f9c8082a43d000c8001e012c160629155636f27e'))
-    # sleep(5)
-    # print(a.status)
-    # a.receive()
-    # for i in range(10):
-    #     a.receive()
-    # sleep(10)
-    # a.close()

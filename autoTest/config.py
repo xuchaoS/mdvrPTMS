@@ -9,10 +9,10 @@ TINY_DELAY = 0.5
 LONGER_DELAY = 3
 
 # 数据接入IP
-ACCESSIP = '172.16.50.98'
+ACCESSIP = '192.168.204.131'
 
 # RabbitMQ IP
-MQIP = '172.16.50.54'
+MQIP = '192.168.204.131'
 
 if __name__ == '__main__':
     pass

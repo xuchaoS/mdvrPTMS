@@ -96,7 +96,7 @@ if __name__ == '__main__':
     # a = MqClient(ip)
     # a.start()
     ap = argparse.ArgumentParser(description='create multi MDVR for performance testing')
-    ap.add_argument('-d', dest='ip', default='172.16.50.54', type=str, help='rabbitMQ IP, default=172.16.50.54')
+    ap.add_argument('-d', dest='ip', default='192.168.204.131', type=str, help='rabbitMQ IP, default=172.16.50.54')
     ap.add_argument('-q', action='store_true', dest='quiet', help='be quiet when running')
     args = ap.parse_args()
     quiet = args.quiet
