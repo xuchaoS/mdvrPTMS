@@ -240,13 +240,13 @@ class MDVR(object):
         self.send_message(MESSAGE_ID['heart beat'], message_body, 'heart beat')
 
     def send_register(self):
-        message_body = b'%s' * 7 % (int_to_word(self.province_id),
-                                    int_to_word(self.city_id),
-                                    str_to_byte(self.manufacturer_id),
-                                    str_to_byte(self.terminal_type).ljust(20, b'\x00'),
-                                    str_to_byte(self.terminal_id).ljust(7, b'\x00'),
-                                    int_to_byte(self.plate_color),
-                                    str_to_string(self.plate))
+        message_body = bytes(Word(self.province_id) +
+                             Word(self.city_id) +
+                             ByteN(self.manufacturer_id, 5, False) +
+                             ByteN(self.terminal_type, 20) +
+                             ByteN(self.terminal_id, 7) +
+                             Byte(self.plate_color) +
+                             String(self.plate))
         self.send_message(MESSAGE_ID['terminal register'], message_body, 'terminal register')
 
     def send_logout(self):
@@ -255,30 +255,22 @@ class MDVR(object):
 
     def send_terminal_authentication(self):
         assert self.authentication_code != ''
-        message_body = str_to_string(self.authentication_code)
+        message_body = String(self.authentication_code).to_bytes()
         self.send_message(MESSAGE_ID['terminal authentication'], message_body, 'terminal authentication')
 
     def send_location_information(self):
-        alarm_flag = int_to_dword(bitlist_to_int(self.alarm_flag))
-        status = int_to_dword(bitlist_to_int(self.status))
-        latitude = int_to_dword(abs(int(self.gps.latitude * 1000000)))
-        longitude = int_to_dword(abs(int(self.gps.longitude * 1000000)))
-        height = int_to_word(self.gps.height)
-        speed = int_to_word(self.gps.speed)
-        direction = int_to_word(self.gps.direction)
-        time = int_to_bcd(int(strftime('%y%m%d%H%M%S')), 6)
-        message_body_base = b'%s' * 8 % (alarm_flag,
-                                         status,
-                                         latitude,
-                                         longitude,
-                                         height,
-                                         speed,
-                                         direction,
-                                         time,)
-        message_body_addition = b'\x01\x04%s\x02\x02%s\x03\x02%s' % (int_to_dword(self.mileage),
-                                                                     int_to_word(self.oil),
-                                                                     int_to_word(
-                                                                         self.gps.speed))  # +b'\xe0\x53'+b'0'*83
+        alarm_flag = Dword(bitlist_to_int(self.alarm_flag))
+        status = Dword(bitlist_to_int(self.status))
+        latitude = Dword(abs(int(self.gps.latitude * 1000000)))
+        longitude = Dword(abs(int(self.gps.longitude * 1000000)))
+        height = Word(self.gps.height)
+        speed = Word(self.gps.speed)
+        direction = Word(self.gps.direction)
+        time = BcdTime(datetime.datetime.now())
+        message_body_base = bytes(alarm_flag + status + latitude + longitude + height + speed + direction + time)
+        message_body_addition = b'\x01\x04%s\x02\x02%s\x03\x02%s' % (Dword(self.mileage),
+                                                                     Word(self.oil),
+                                                                     Word(self.gps.speed))
         message_body = message_body_base + message_body_addition
         self.send_message(MESSAGE_ID['location information'], message_body, 'location information')
 
@@ -297,7 +289,7 @@ class MDVR(object):
         self.sock.send(bytes_message)
         logging.info('%012d send %-20s : %s' % (self.phoneNum, log_tips, str(binascii.b2a_hex(bytes_message))))
         if isinstance(message, Message) and add_to_waiting_response:
-            self.waiting_response[message.message_num] = message
+            self.waiting_response[message.num] = message
 
     def receive_message(self, timeout=None):
         if timeout is None:
@@ -312,7 +304,7 @@ class MDVR(object):
             finally:
                 self.sock.settimeout(None)
         if rec:
-            logging.info('receive : %s' % printfuled(rec))
+            logging.info('receive : %s' % DataBytes(rec))
             return rec
         else:
             logging.info('%12d receive none bytes closing connect' % self.phoneNum)
@@ -333,14 +325,14 @@ class MDVR(object):
         result = None
         message_id = None
         if rec:
-            logging.info('receive : %s' % printfuled(rec))
+            logging.info('receive : %s' % DataBytes(rec))
             if self._buffer:
                 self._buffer += rec
             else:
                 if rec.startswith(Message.MESSAGE_START):
                     self._buffer += rec
                 else:
-                    logging.warning('this message is not start with %s, ignore it' % printfuled(Message.MESSAGE_START))
+                    logging.warning('this message is not start with %s, ignore it' % DataBytes(Message.MESSAGE_START))
             while self._buffer:
                 index = self._buffer.find(Message.MESSAGE_END, 1)
                 if index == -1:
@@ -359,7 +351,7 @@ class MDVR(object):
                             message_head = message_head_body_checksum[:12]
                             message_body = message_head_body_checksum[12: -1]
                             message_id = message_head[: 2]
-                            message_num = word_to_int(message_head[10: 12])
+                            message_num = Word(message_head[10: 12]).to_int()
                             if len(message_body) == message_body_len:
                                 if message_id == MESSAGE_ID['terminal register reply']:
                                     result = self._receive_terminal_register_reply(message_body)
@@ -380,14 +372,14 @@ class MDVR(object):
                                 elif message_id == MESSAGE_ID['text message down']:
                                     self._receive_text_message_down(message_body, message_num)
                                 else:
-                                    logging.warning('reply id %s is not support' % printfuled(message_id))
+                                    logging.warning('reply id %s is not support' % DataBytes(message_id))
                                     self._send_terminal_common_reply(message_num, message_id, 3)
                             else:
                                 logging.warning('message len in message head is not correct')
                         else:
                             logging.warning('separate or rsa is not support')
                     else:
-                        logging.warning('checksum is not correct: %s' % printfuled(rec))
+                        logging.warning('checksum is not correct: %s' % DataBytes(rec))
                         # else:
                         #     logging.warning('message is not start or end with 0x7e')
         else:
@@ -416,7 +408,7 @@ class MDVR(object):
         else:
             result = message_body[2]
             if result == 0:
-                self.authentication_code = string_to_str(message_body[3:])
+                self.authentication_code = String(message_body[3:]).to_str()
                 logging.info('register successful, authentication_code is %s' % repr(self.authentication_code))
             elif result == 1:
                 logging.warning('this car is registered')
@@ -456,25 +448,25 @@ class MDVR(object):
 
     def _receive_set_polygons_region(self, message_body, message_num):
         index = 0
-        region_id = dword_to_int(message_body[index: index + 4])
+        region_id = Dword(message_body[index: index + 4]).to_int()
         cur_region = {}
         self.polygons_regions[region_id] = cur_region
         index += 4
-        region_property = word_to_int(message_body[index: index + 2])
+        region_property = Word(message_body[index: index + 2]).to_int()
         cur_region['region_property'] = region_property
         index += 2
         if region_property & 0b1:  # 根据时间
-            start_time = bcd_to_time_str(message_body[index: index + 6])
+            start_time = BcdTime(message_body[index: index + 6]).to_str()
             cur_region['start_time'] = start_time
             index += 6
-            stop_time = bcd_to_time_str(message_body[index: index + 6])
+            stop_time = BcdTime(message_body[index: index + 6]).to_str()
             cur_region['stop_time'] = stop_time
             index += 6
         if region_property & 0b10:  # 限速
-            max_speed = word_to_int(message_body[index: index + 2])
+            max_speed = Word(message_body[index: index + 2]).to_int()
             cur_region['max_speed'] = max_speed
             index += 2
-            over_speed_time = byte_to_int(message_body[index: index + 1])
+            over_speed_time = Byte(message_body[index: index + 1]).to_int()
             cur_region['over_speed_time'] = over_speed_time
             index += 1
         # TODO not finished
@@ -486,7 +478,7 @@ class MDVR(object):
         index = 1
         region_id_list = []
         for _ in range(region_count):
-            region_id_list.append(dword_to_int(message_body[index: index + 4]))
+            region_id_list.append(Dword(message_body[index: index + 4]).to_int())
             index += 4
         for i in region_id_list:
             try:
@@ -498,7 +490,7 @@ class MDVR(object):
 
     def _receive_set_route_info(self, message_body, message_num):
         index = 0
-        route_id = dword_to_int(message_body[index: index + 4])
+        route_id = Dword(message_body[index: index + 4]).to_int()
         index += 4
         cur_route = {}
         self.routes[route_id] = cur_route
@@ -511,7 +503,7 @@ class MDVR(object):
         index = 1
         route_id_list = []
         for _ in range(route_count):
-            route_id_list.append(dword_to_int(message_body[index: index + 4]))
+            route_id_list.append(Dword(message_body[index: index + 4]).to_int())
             index += 4
         for i in route_id_list:
             try:
@@ -528,18 +520,18 @@ class MDVR(object):
         for i in range(param_count):
             # print(printfuled(message_body))
             # print(printfuled(message_body[index: index + 4]))
-            param_id = dword_to_int(message_body[index: index + 4])
+            param_id = Dword(message_body[index: index + 4]).to_int()
             index += 4
             param_len = message_body[index]
             index += 1
             if param_len == 1:
                 param_value = message_body[index]
             elif param_len == 2:
-                param_value = word_to_int(message_body[index: index + 2])
+                param_value = Word(message_body[index: index + 2]).to_int()
             elif param_len == 4:
-                param_value = dword_to_int(message_body[index: index + 4])
+                param_value = Dword(message_body[index: index + 4]).to_int()
             else:
-                param_value = string_to_str(message_body[index: index + param_len])
+                param_value = String(message_body[index: index + param_len]).to_str()
             index += param_len
             params[param_id] = param_value
         logging.info('set params success: count: %d' % param_count)
@@ -591,7 +583,7 @@ class MDVR(object):
         else:
             flag_text.append('5: CAN fault code')
         flag_text = ', '.join(flag_text)
-        text = string_to_str(message_body[1:])
+        text = String(message_body[1:]).to_str()
         logging.info('reveive text message: flag: %s; text :%s' % (flag_text, text))
         self._send_terminal_common_reply(message_num, MESSAGE_ID['text message down'], 0)
 
@@ -701,22 +693,22 @@ class MDVR(object):
     def _send_n9m_message(self, payload, sock):
         payload = json.dumps(payload)
         payload_len = len(payload)
-        n9m_head = b'\x08' + b'\x00' * 3 + int_to_dword(payload_len) + b'\x52' + b'\x00' * 3
-        n9m_message = n9m_head + str_to_byte(payload)
+        n9m_head = b'\x08' + b'\x00' * 3 + Dword(payload_len).to_bytes() + b'\x52' + b'\x00' * 3
+        n9m_message = n9m_head + Byte(payload).to_bytes()
         sock.send(n9m_message)
         logging.info('send n9m: %s' % payload)
 
     def _send_penetrate_message(self, payload):
         payload = json.dumps(payload)
         payload_len = len(payload)
-        n9m_head = b'\x00' * 4 + int_to_dword(payload_len) + b'\x52' + b'\x00' * 3
-        n9m_message = b'\x00' + n9m_head + str_to_byte(payload)
+        n9m_head = b'\x00' * 4 + Dword(payload_len).to_bytes() + b'\x52' + b'\x00' * 3
+        n9m_message = b'\x00' + n9m_head + Byte(payload).to_bytes()
         self.send_message(MESSAGE_ID['N9M penetrate up'], n9m_message, add_to_waiting_response=False)
 
     def _send_terminal_common_reply(self, reply_num, reply_id, result):
-        message_body = b'%s' * 3 % (int_to_word(reply_num),
+        message_body = b'%s' * 3 % (Word(reply_num).to_bytes(),
                                     reply_id,
-                                    int_to_byte(result))
+                                    Byte(result).to_bytes())
         self.send_message(MESSAGE_ID['terminal common reply'], message_body, 'terminal common reply', False)
 
     def test(self):
@@ -756,68 +748,6 @@ def check_checksum(message):
         return False
 
 
-class Message(object):
-    ID_TERMINAL_COMMON_REPLY = b'\x00\x01'
-    ID_PLATFORM_COMMON_REPLY = b'\x80\x01'
-    ID_HEART_BEAT = b'\x00\x02'
-    ID_REQUEST_MESSAGE_AFRESH = b'\x80\x03'
-    ID_TERMINAL_REGISTER = b'\x01\x00'
-    ID_TERMINAL_REGISTER_REPLY = b'\x81\x00'
-    ID_TERMINAL_LOGOUT = b'\x00\x03'
-    ID_TERMINAL_AUTHENTICATION = b'\x01\x02'
-    MESSAGE_START = b'\x7e'
-    MESSAGE_END = b'\x7e'
-
-    def __init__(self, message_id, phone_num, message_body, message_num, is_separate=False, is_rsa=False):
-        self.message_id = message_id
-        self.phone_num = phone_num
-        self.message_body = message_body
-        self.message_num = message_num
-        self.checksum = b''
-        self.message_head = b''
-        self.message = b''
-        self.is_separate = is_separate
-        self.is_rsa = is_rsa
-        self.generate_message_head()
-        self.generate_checksum()
-        self.generate_message()
-
-    def generate_message_head(self):
-        self.message_head = self.message_id
-        message_body_property = len(self.message_body)
-        if self.is_separate:
-            message_body_property += (1 << 13)
-        if self.is_rsa:
-            message_body_property += (1 << 10)
-        self.message_head += int_to_word(message_body_property)
-        self.message_head += int_to_bcd(self.phone_num, 6)
-        self.message_head += int_to_word(self.message_num)
-        if self.is_separate:
-            pass
-
-    def generate_checksum(self):
-        self.checksum = bytes((functools.reduce(operator.xor, self.message_head + self.message_body),))
-
-    @staticmethod
-    def make_message_escaped(message):
-        assert isinstance(message, bytes)
-        if b'\x7d' in message:
-            message = message.replace(b'\x7d', b'\x7d\x01')
-        if b'\x7e' in message:
-            message = message.replace(b'\x7e', b'\x7d\x02')
-        return message
-
-    def generate_message(self):
-        self.message = self.MESSAGE_START + self.make_message_escaped(
-            self.message_head + self.message_body + self.checksum) + self.MESSAGE_END
-
-    def __bytes__(self):
-        return self.message
-
-    def __str__(self):
-        return printfuled(self.message)
-
-
 class MdvrBaseError(Exception):
     """自定义异常的基类"""
     pass
@@ -840,7 +770,9 @@ class DataBytesTypeError(MdvrBaseError):
 class DataBytes(object):
     """用于数据类型转换"""
     def __init__(self, value=None):
-        if isinstance(value, bytes):
+        if value == None:
+            self.value = b''
+        elif isinstance(value, bytes):
             self.value = value
         elif isinstance(value, DataBytes):
             self.value = value.value
@@ -849,8 +781,8 @@ class DataBytes(object):
         else:
             raise DataBytesTypeError()
 
-    def to_string(self):
-        return printfuled(self.value)
+    def to_str(self):
+        return binascii.b2a_hex(self.value).decode('utf-8')
 
     def to_bytes(self):
         return self.value
@@ -862,13 +794,35 @@ class DataBytes(object):
         return result
 
     def __add__(self, other):
-        assert isinstance(other, DataBytes)
-        return DataBytes(self.value + other.value)
+        if isinstance(other, bytes):
+            return self.value + other
+        elif isinstance(other, DataBytes):
+            return DataBytes(self.value + other.value)
+        else:
+            raise DataBytesTypeError()
 
-    __str__ = to_string
+    def __radd__(self, other):
+        assert isinstance(other, bytes)
+        return other + self.value
+
+    def __len__(self):
+        return len(self.value)
+
+    def __getitem__(self, item):
+        return DataBytes(self.value.__getitem__(item))
+
+    def __eq__(self, other):
+        if isinstance(other, DataBytes):
+            return self.value == other.value
+        elif isinstance(other, bytes):
+            return self.value == other
+        else:
+            raise DataBytesTypeError()
+
+    __str__ = to_str
     __bytes__ = to_bytes
     __int__ = to_int
-    to_printful_string = to_string
+    to_printful_string = to_str
 
 
 class Byte(DataBytes):
@@ -878,37 +832,47 @@ class Byte(DataBytes):
             assert 0 <= value <= 255
             self.value = bytes((value,))
         elif isinstance(value, str):
+            print(value)
             assert len(value) == 1
             self.value = value.encode('utf-8')
         elif isinstance(value, bytes):
             assert len(value) == 1
             self.value = value
+        elif isinstance(value, DataBytes):
+            assert len(value) == 1
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
-    def to_string(self):
+    def to_str(self):
         return self.value.decode('utf-8')
 
-    __str__ = to_string
+    __str__ = to_str
 
 
 class ByteN(DataBytes):
-    def __init__(self, value, n):
+    def __init__(self, value, n, fill_with_0=True):
         super().__init__()
         if isinstance(value, str):
             assert len(value) <= n * 2
-            self.value = value.encode('utf-8').ljust(n, b'\x00\x00')
+            if fill_with_0:
+                self.value = value.encode('utf-8').ljust(n, b'\x00')
+            else:
+                assert len(value) == n
+                self.value = value.encode('utf-8')
         elif isinstance(value, list) or isinstance(value, tuple):
             assert len(value) == n
             self.value = b''.join([bytes(Byte(i)) for i in value])
+        elif isinstance(value, DataBytes):
+            assert len(value) == n
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
-    def to_string(self):
+    def to_str(self):
         return self.value.decode('utf-8')
 
-    __str__ = to_string
-
+    __str__ = to_str
 
 
 class Word(DataBytes):
@@ -923,13 +887,16 @@ class Word(DataBytes):
         elif isinstance(value, bytes):
             assert len(value) == 2
             self.value = value
+        elif isinstance(value, DataBytes):
+            assert len(value) == 2
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
-    def to_string(self):
+    def to_str(self):
         return self.value.decode('utf-8')
 
-    __str__ = to_string
+    __str__ = to_str
 
 
 class Dword(DataBytes):
@@ -944,13 +911,16 @@ class Dword(DataBytes):
         elif isinstance(value, bytes):
             assert len(value) == 4
             self.value = value
+        elif isinstance(value, DataBytes):
+            assert len(value) == 4
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
-    def to_string(self):
+    def to_str(self):
         return self.value.decode('utf-8')
 
-    __str__ = to_string
+    __str__ = to_str
 
 
 class String(DataBytes):
@@ -960,13 +930,15 @@ class String(DataBytes):
             self.value = value.encode('gbk')
         elif isinstance(value, bytes):
             self.value = value
+        elif isinstance(value, DataBytes):
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
-    def to_string(self):
+    def to_str(self):
         return self.value.decode('gbk')
 
-    __str__ = to_string
+    __str__ = to_str
 
 
 class Bcd(DataBytes):
@@ -974,13 +946,16 @@ class Bcd(DataBytes):
         assert isinstance(n, int)
         super().__init__()
         if isinstance(value, int):
-            assert 0 <= value < 10 ** n
+            assert 0 <= value < 10 ** (2 * n)
             self.value = binascii.a2b_hex(str(value).rjust(2 * n, '0'))
         elif isinstance(value, str):
             assert len(value) % 2 == 0
             self.value = binascii.a2b_hex(value)
         elif isinstance(value, bytes):
             self.value = value
+        elif isinstance(value, DataBytes):
+            assert len(value) == n
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
@@ -1002,11 +977,69 @@ class BcdTime(Bcd):
         elif isinstance(value, bytes):
             assert len(value) == 6
             self.value = value
+        elif isinstance(value, DataBytes):
+            assert len(value) == 6
+            self.value = value.value
         else:
             raise DataBytesTypeError()
 
     def to_datetime(self):
         return datetime.datetime.strptime(self.to_printful_string(), self.time_format)
+
+
+class Message(DataBytes):
+    ID_TERMINAL_COMMON_REPLY = b'\x00\x01'
+    ID_PLATFORM_COMMON_REPLY = b'\x80\x01'
+    ID_HEART_BEAT = b'\x00\x02'
+    ID_REQUEST_MESSAGE_AFRESH = b'\x80\x03'
+    ID_TERMINAL_REGISTER = b'\x01\x00'
+    ID_TERMINAL_REGISTER_REPLY = b'\x81\x00'
+    ID_TERMINAL_LOGOUT = b'\x00\x03'
+    ID_TERMINAL_AUTHENTICATION = b'\x01\x02'
+    MESSAGE_START = b'\x7e'
+    MESSAGE_END = b'\x7e'
+
+    def __init__(self, message_id, phone_num, message_body, message_num, is_separate=False, is_rsa=False):
+        super().__init__()
+        self.id = message_id
+        self.phone_num = phone_num
+        self.body = message_body
+        self.num = message_num
+        self.checksum = b''
+        self.head = b''
+        self.value = b''
+        self.is_separate = is_separate
+        self.is_rsa = is_rsa
+        self.generate_message_head()
+        self.generate_checksum()
+        self.generate_message()
+
+    def generate_message_head(self):
+        self.head = self.id
+        message_body_property = len(self.body)
+        if self.is_separate:
+            message_body_property += (1 << 13)
+        if self.is_rsa:
+            message_body_property += (1 << 10)
+        self.head += bytes(Word(message_body_property) + Bcd(self.phone_num, 6) + Word(self.num))
+        if self.is_separate:
+            pass
+
+    def generate_checksum(self):
+        self.checksum = bytes((functools.reduce(operator.xor, self.head + self.body),))
+
+    @staticmethod
+    def make_message_escaped(message):
+        assert isinstance(message, bytes)
+        if b'\x7d' in message:
+            message = message.replace(b'\x7d', b'\x7d\x01')
+        if b'\x7e' in message:
+            message = message.replace(b'\x7e', b'\x7d\x02')
+        return message
+
+    def generate_message(self):
+        self.value = self.MESSAGE_START + self.make_message_escaped(
+            self.head + self.body + self.checksum) + self.MESSAGE_END
 
 
 def multiMDVR(total, thread_per_process=100, ip='127.0.0.1'):
@@ -1029,3 +1062,9 @@ def multi_thread(start_num, total, ip='127.0.0.1'):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s: %(message)s ' + ' ' * 10 + ' %(pathname)s: %(lineno)s')
+    a = MDVR(123, ip='192.168.204.131')
+    a.connect()
+    a.send_register()
+    a.close()
+    print(DataBytes(b'12') + b'34')
+    print(b'12' + DataBytes(b'34'))
